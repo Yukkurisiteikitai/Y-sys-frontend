@@ -1,0 +1,8 @@
+site/site_venv
+__pychache__
+mypy_cache
+.vscode
+.DS_Store
+*.log
+*.sqlite3
+*.pyc
