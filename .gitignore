@@ -6,3 +6,4 @@ mypy_cache
 *.log
 *.sqlite3
 *.pyc
+*.env
