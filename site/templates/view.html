@@ -4,7 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>動的ノードグラフシステム</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='view/style.css') }}" />
+    <link rel="icon" href="{{ url_for('static', path='icon/chat.ico') }}">
+    <link rel="stylesheet" href="{{ url_for('static', path='view/style.css') }}" />
 </head>
 <body>
     <div class="container">
@@ -50,8 +51,8 @@
         </div>
     </div>
 
-    <script src="{{ url_for('static', filename='view/main.js') }}"></script>
-    <script src="{{ url_for('static', filename='view/selecter.js') }}"></script>
+    <script src="{{ url_for('static', path='view/main.js') }}"></script>
+    <script src="{{ url_for('static', path='view/selecter.js') }}"></script>
     <!-- <script type="text/typescript" src="static/view/selecter.ts"></script> -->
 </body>
 </html>
