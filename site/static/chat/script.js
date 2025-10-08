@@ -1,603 +1,240 @@
-// script.js
+document.addEventListener('DOMContentLoaded', () => {
+    const API_BASE_URL = 'http://127.0.0.1:8000';
+    let sessionId = null;
 
-// console
+    // DOM要素の取得
+    const messageForm = document.getElementById('message-form');
+    const messageInput = document.getElementById('message-input');
+    const sendButton = document.getElementById('send-button');
+    const chatHistory = document.getElementById('chat-history');
+    const thinkingContainer = document.getElementById('thinking-process-container');
+    const thinkingProcess = document.getElementById('thinking-process');
 
-
-// --- DOM要素取得 ---
-const userInput = document.getElementById('userInput');
-const sendBtn = document.getElementById('sendBtn');
-const chatMessages = document.getElementById('chatMessages');
-const newChatBtn = document.getElementById('newChatBtn');
-const authContainer = document.getElementById('auth-container');
-const userInfo = document.getElementById('user-info');
-const userEmailSpan = document.getElementById('user-email');
-const logoutBtn = document.getElementById('logoutBtn');
-const googleSignInButton = document.querySelector('.g_id_signin'); // Googleボタン本体
-
-
-// --- API設定 ---
-// const API_BASE_URL = "http://localhost:49604"; // あなたのFastAPIサーバーのURL
-
-console.log(API_BASE_URL);
-// --- 状態変数 ---
-let currentThreadId = null;
-let currentQuestionIdToAnswer = null; // AIからの現在の質問ID
-let messages = []; // チャットメッセージの配列: { id: string, role: 'user'|'assistant'|'system', content: string, isLoading?: boolean }
-let currentUserIdForApi = 1; // 仮の認証済みユーザーID (実際にはログイン時に設定)
-let currentUser = null; 
-// let currentThreadId = null;
-// let currentQuestionIdToAnswer = null; 
-// let messages = []; 
-// let currentUserIdForApi = 1; 
-
-// ユーザー入力分析関連の変数はそのまま (必要に応じて)
-let inputStartTime = null;
-let previousText = '';
-let lastInputTime = null;
-let backspaceCount = 0;
-let editHistory = [];
-let isThinking = false;
-let thinkingTimeout;
-let isIMEComposing = false;
-let textBeforeComposition = '';
-
-// Googleログイン成功時のコールバック関数 
-async function handleCredentialResponse(response) {
-    const googleIdToken = response.credential;
-    console.log("Got Google ID token: " + googleIdToken);
-
-    try {
-        const res = await fetch(`${API_BASE_URL}/auth/google/login`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token: googleIdToken }) 
-        });
-
-        if (!res.ok) {
-            const errorData = await res.json();
-            throw new Error(errorData.detail || 'Backend authentication failed');
+    /**
+     * Server-Sent Events (SSE) のメッセージを解析するパーサー。
+     * 1行ずつデータをpushして、完全なメッセージが構築されたらコールバックを呼び出す。
+     */
+    class SSEParser {
+        constructor(onMessage) {
+            this.onMessage = onMessage;
+            this.eventName = '';
+            this.dataBuffer = '';
         }
 
-        const loginData = await res.json();
-        console.log("Backend login successful:", loginData);
+        push(line) {
+            // コメント行は無視
+            if (line.startsWith(':')) {
+                return;
+            }
 
-        // トークンをlocalStorageに保存
-        localStorage.setItem('googleIdToken', googleIdToken);
-        
-        // ログイン後のUIと状態を更新
-        updateUIAfterLogin({id: loginData.user_id, email: loginData.user_email});
+            // 空行はメッセージの区切り
+            if (line === '') {
+                if (this.eventName && this.dataBuffer) {
+                    try {
+                        // Pythonのdictリテラル風の文字列を正規のJSON形式に変換する
+                        const jsonString = this.dataBuffer
+                            .replace(/'/g, '"')      // シングルクォートをダブルクォートに
+                            .replace(/None/g, 'null')   // None を null に
+                            .replace(/True/g, 'true')   // True を true に
+                            .replace(/False/g, 'false'); // False を false に
+                        const data = JSON.parse(jsonString);
+                        this.onMessage(this.eventName, data);
+                    } catch (e) {
+                        console.error("Failed to parse data:", this.dataBuffer, e);
+                    }
+                }
+                // 次のメッセージのためにバッファをリセット
+                this.eventName = '';
+                this.dataBuffer = '';
+                return;
+            }
 
-    } catch (error) {
-        console.error("Error during backend authentication:", error);
-        updateUIAfterLogout(); // 認証失敗時はログアウト状態にする
-    }
-}
-
-// 保護されたAPIを呼び出すときの例
-async function fetchMyProfile() {
-    const token = localStorage.getItem('googleIdToken');
-    if (!token) {
-        console.error("Not logged in.");
-        return;
+            if (line.startsWith('event:')) {
+                this.eventName = line.substring(6).trim();
+            } else if (line.startsWith('data:')) {
+                // 複数行のdataに対応するため追記する
+                this.dataBuffer += line.substring(5).trim();
+            }
+        }
     }
 
-    const res = await fetch(`${API_BASE_URL}/users/me`, {
-        headers: {
-            // AuthorizationヘッダーにGoogleのIDトークンをセットする
-            'Authorization': `Bearer ${token}`
-        }
-    });
-
-    const myProfile = await res.json();
-    console.log("My profile:", myProfile);
-}
-
-
-// --- UI更新関数 ---
-function renderMessages() {
-    chatMessages.innerHTML = ''; // 表示を一旦全てクリア
-    messages.forEach(msgData => {
-        const messageDiv = document.createElement('div');
-        messageDiv.className = `message ${msgData.role}`;
-        if (msgData.isLoading) {
-            messageDiv.classList.add('loading');
-        }
-
-        const messageContent = document.createElement('div');
-        messageContent.className = 'message-content';
-        messageContent.innerHTML = msgData.isLoading ? '<span class="dot-flashing"></span>' : escapeHtml(msgData.content).replace(/\n/g, '<br>');
-        messageDiv.appendChild(messageContent);
-
-        if (msgData.role === 'assistant' && !msgData.isLoading && msgData.content) {
-            const copyButton = document.createElement('button');
-            copyButton.className = 'copy-button';
-            copyButton.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>`;
-            copyButton.title = "コピー";
-            copyButton.addEventListener('click', () => {
-                navigator.clipboard.writeText(msgData.content).then(() => {
-                    copyButton.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
-                    copyButton.classList.add('copied');
-                    setTimeout(() => {
-                        copyButton.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>`;
-                        copyButton.classList.remove('copied');
-                    }, 2000);
-                }).catch(err => console.error('コピーに失敗しました:', err));
+    // 1. セッションを作成
+    const createSession = async () => {
+        try {
+            const response = await fetch(`${API_BASE_URL}/api/v1/sessions`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({"metadata": {"client_info": "api_test_client"}}) // サーバー仕様に合わせて空のボディを送信
             });
-            messageDiv.appendChild(copyButton);
+            if (!response.ok) throw new Error(`Session creation failed: ${response.statusText}`);
+            const data = await response.json();
+            sessionId = data.session_id;
+            console.log('Session created:', sessionId);
+        } catch (error) {
+            console.error('Error creating session:', error);
+            appendMessage('assistant', 'APIへの接続に失敗しました。サーバーが起動しているか確認してください。');
+            messageInput.disabled = true;
+            sendButton.disabled = true;
         }
-        chatMessages.appendChild(messageDiv);
-    });
-    chatMessages.scrollTop = chatMessages.scrollHeight; // 自動スクロール
-}
-
-// --- メッセージ状態操作関数 ---
-function addMessageToState(role, content, isLoading = false) {
-    const newMessage = {
-        id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`, // ユニークID生成
-        role,
-        content,
-        isLoading
     };
-    messages.push(newMessage);
-    renderMessages(); // UIを更新
-    return newMessage.id; // 追加したメッセージのIDを返す (後で更新するため)
-}
 
-function updateMessageInState(messageId, newContent, newIsLoading) {
-    const messageIndex = messages.findIndex(msg => msg.id === messageId);
-    if (messageIndex !== -1) {
-        if (newContent !== undefined) messages[messageIndex].content = newContent;
-        if (newIsLoading !== undefined) messages[messageIndex].isLoading = newIsLoading;
-        renderMessages(); // UIを更新
-    }
-}
+    // フォーム送信時の処理
+    messageForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const message = messageInput.value.trim();
+        if (!message || !sessionId) return;
 
-function removeLastMessageFromStateIfMatches(role, partialContent) {
-    // 簡易的なロールバック用：最後に送信しようとしたメッセージを特定して削除する
-    if (messages.length > 0) {
-        const lastMessage = messages[messages.length - 1];
-        if (lastMessage.role === role && lastMessage.content.startsWith(partialContent.substring(0,10))) {
-            messages.pop();
-            renderMessages();
-            return true;
-        }
-    }
-    return false;
-}
+        appendMessage('user', message);
+        messageInput.value = '';
+        setLoading(true);
 
-
-// --- API呼び出し関数 ---
-async function fetchAndDisplayNextAiQuestion() {
-    if (!currentThreadId) {
-        console.log("No active thread to fetch question for.");
-        addMessageToState('system', 'チャットを開始してください。');
-        return;
-    }
-
-    const loadingMsgId = addMessageToState('system', 'AIが次の質問を準備しています...', true);
-
-    try {
-        const response = await fetch(`${API_BASE_URL}/db/questions/users/${currentUserIdForApi}/next`); // currentUserIdForApi を使用
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.detail || `次の質問取得エラー: ${response.status}`);
-        }
-        const nextQuestionData = await response.json();
-
-        updateMessageInState(loadingMsgId, '', false); // システムのローディングメッセージをクリア (または削除)
-        // messages = messages.filter(msg => msg.id !== loadingMsgId); // または削除
-        // renderMessages();
-
-
-        if (nextQuestionData && nextQuestionData.question_text) {
-            currentQuestionIdToAnswer = nextQuestionData.question_id;
-            let aiDisplayMessage = `${nextQuestionData.question_text}`; // "AI: " プレフィックスはロールで表現
-            if (nextQuestionData.guidance) {
-                aiDisplayMessage += `\n\n(ガイダンス: ${nextQuestionData.guidance})`;
-            }
-            addMessageToState('assistant', aiDisplayMessage);
-        } else {
-            currentQuestionIdToAnswer = null;
-            addMessageToState('assistant', nextQuestionData.guidance || "次の質問はありません。自由にお話しください。");
-        }
-    } catch (error) {
-        console.error("Error fetching next AI question:", error);
-        updateMessageInState(loadingMsgId, `次の質問取得エラー: ${error.message}`, false);
-        currentQuestionIdToAnswer = null;
-    }
-}
-
-// --- イベントハンドラ ---
-newChatBtn.addEventListener('click', async () => {
-    if (!currentUser){
-        console.log("not_Login")
-        addMessageToState('system', 'ログインしてください。');
-        return
-    }
-    messages = []; // メッセージ状態をクリア
-    renderMessages(); // UIをクリア
-    let currentThreadId = null;
-    let currentQuestionIdToAnswer = null;
-    editHistory = [];
-
-    const systemMsgId = addMessageToState('system', '新しいチャットを開始しています...', true);
-
-    try {
-        const threadPayload = {
-            mode: 'chat',
-            title: `New Chat ${new Date().toLocaleString()}`
-        };
-        const response = await fetch(`${API_BASE_URL}/db/threads/`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(threadPayload)
-        });
-
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.detail || `スレッド作成エラー: ${response.status}`);
-        }
-        const newThread = await response.json();
-        currentThreadId = newThread.thread_id;
-
-        updateMessageInState(systemMsgId, `新しいチャット (ID: ${currentThreadId}) を開始しました。AIからの最初の質問を待ちます...`, false);
-        console.log("New thread created:", currentThreadId);
-
-        await fetchAndDisplayNextAiQuestion();
-
-    } catch (error) {
-        console.error("Error starting new chat:", error);
-        updateMessageInState(systemMsgId, `チャット開始エラー: ${error.message}`, false);
-    }
-});
-
-async function sendMessage() {
-    const userMessageText = userInput.value.trim();
-    if (!userMessageText || sendBtn.disabled) return;
-
-    if (!currentThreadId) {
-        addMessageToState('system', 'エラー: チャットが開始されていません。新しいチャットを開始してください。');
-        console.error("sendMessage called without a valid currentThreadId.");
-        return;
-    }
-
-    const inputEndTime = new Date();
-    const inputDuration = inputStartTime ? (inputEndTime - inputStartTime) : 0;
-
-    // UIにユーザーメッセージを即座に反映 (状態配列に追加して再描画)
-    const userMsgDisplayId = addMessageToState('user', userMessageText);
-    const currentUserInputForApi = userMessageText; // API送信用に保持 (userInputはクリアされるため)
-    userInput.value = '';
-    userInput.style.height = 'auto'; // 入力欄の高さをリセット
-    sendBtn.disabled = true;
-    userInput.disabled = true;
-
-    const assistantLoadingMsgId = addMessageToState('assistant', '...', true); // AI応答のローディング表示
-
-    // ユーザー入力行動の分析 (ここはそのまま)
-    const editSummary = generateEditHistorySummary(editHistory);
-    const behaviorInterpretation = interpretUserInputBehavior(inputDuration, editHistory, backspaceCount, currentUserInputForApi.length);
-    console.log('--- ユーザー入力分析 ---');
-    console.log(`入力時間: ${inputDuration / 1000}秒`, `編集概要: ${editSummary}`, `BS回数: ${backspaceCount}`, `解釈: ${behaviorInterpretation}`);
-    console.log('----------------------');
-
-    try {
-        const messagePayload = {
-            role: 'user',
-            context: currentUserInputForApi
-        };
-        if (currentQuestionIdToAnswer) {
-            messagePayload.answered_question_id = currentQuestionIdToAnswer;
-        }
-
-        const response = await fetch(`${API_BASE_URL}/db/threads/${currentThreadId}/messages/`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(messagePayload)
-        });
-
-        if (!response.ok) {
-            // 送信失敗: UIから仮表示したユーザーメッセージとAIローディングを削除
-            messages = messages.filter(msg => msg.id !== userMsgDisplayId && msg.id !== assistantLoadingMsgId);
-            renderMessages();
-            const errorData = await response.json();
-            addMessageToState('system', `メッセージ送信エラー: ${errorData.detail || response.status}`); // エラーをシステムメッセージとして表示
-            throw new Error(errorData.detail || `メッセージ送信エラー: ${response.status}`); // ログ用
-        }
-        // ユーザーメッセージの保存成功
-        const sentMessageData = await response.json();
-        console.log("User message sent and saved:", sentMessageData);
-        // APIから返ってきた正式なユーザーメッセージ情報でUIの状態を更新 (任意)
-        // messages 配列の userMsgDisplayId のメッセージを sentMessageData で置き換えても良い
-
-        // 成功したら、ローディング中のアシスタントメッセージは不要になるか、次の質問表示に置き換わる
-        messages = messages.filter(msg => msg.id !== assistantLoadingMsgId); // ローディングを削除
-        renderMessages(); // 一旦UIを更新
-
-        currentQuestionIdToAnswer = null; // 回答したのでリセット
-        await fetchAndDisplayNextAiQuestion(); // 次のAIの質問を取得・表示
-
-    } catch (error) {
-        console.error("Error in sendMessage flow:", error.message);
-        // エラーが発生した場合、ローディング中のアシスタントメッセージをエラーメッセージに更新
-        updateMessageInState(assistantLoadingMsgId, `エラー: ${error.message}`, false);
-    } finally {
-        sendBtn.disabled = false;
-        userInput.disabled = false;
-        if (document.activeElement !== userInput) { // 他の要素にフォーカスが移っていなければ
-            userInput.focus();
-        }
-        // 入力セッションリセット処理
-        inputStartTime = new Date();
-        previousText = '';
-        lastInputTime = inputStartTime;
-        backspaceCount = 0;
-        editHistory = [];
-        isThinking = false;
-    }
-}
-
-// --- UIイベントリスナー (フォーカス、IME、入力、キーダウン) ---
-// これらは前回提示したもので問題ないはずです。
-userInput.addEventListener('focus', () => {
-    inputStartTime = new Date();
-    lastInputTime = inputStartTime;
-    previousText = userInput.value;
-    textBeforeComposition = userInput.value;
-    backspaceCount = 0;
-    isThinking = false;
-    editHistory = []; // 新しい入力セッションのために編集履歴をリセット
-    // console.log("Focus: Input session started.");
-});
-
-
-userInput.addEventListener('compositionstart', () => {
-    isIMEComposing = true;
-    textBeforeComposition = userInput.value;
-});
-
-userInput.addEventListener('compositionend', () => {
-    isIMEComposing = false;
-    const currentText = userInput.value;
-    recordEdit(textBeforeComposition, currentText);
-    previousText = currentText;
-    lastInputTime = new Date();
-    userInput.dispatchEvent(new Event('input', { bubbles: true })); // inputイベントを強制発火させてリサイズなどをトリガー
-});
-
-
-userInput.addEventListener('input', () => {
-    const currentTime = new Date();
-    const currentValue = userInput.value;
-
-    if (isIMEComposing) {
-        userInput.style.height = 'auto';
-        userInput.style.height = userInput.scrollHeight + 'px';
-        return; // IME変換中は詳細な差分記録をcompositionendに任せる
-    }
-
-    // IME変換中でない通常の編集
-    if (currentValue !== previousText) {
-        recordEdit(previousText, currentValue);
-        previousText = currentValue;
-    }
-
-    lastInputTime = currentTime;
-    userInput.style.height = 'auto';
-    userInput.style.height = userInput.scrollHeight + 'px';
-
-    // 思考中判定のロジック
-    clearTimeout(thinkingTimeout);
-    isThinking = false; // 入力があったら一旦リセット
-    thinkingTimeout = setTimeout(() => {
-        // currentTime (inputイベント発生時) と lastInputTime (最後のキー入力) を比較
-        // または、単純に現在時刻とlastInputTimeを比較しても良い
-        const now = new Date();
-        if ((now - lastInputTime) >= 2900 && userInput.value.length > 0) { // 3秒近く入力がなければ
-            isThinking = true;
-            // console.log("思考中と判定されました。");
-        }
-    }, 3000); // 3秒間入力がなければ思考中とみなす
-});
-
-userInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Backspace') {
-        backspaceCount++;
-    }
-    if (e.key === 'Enter') {
-        if (e.isComposing || e.keyCode === 229) { // IME変換中のEnter
-            return;
-        }
-        if (!e.shiftKey) { // ShiftなしEnter
-            e.preventDefault();
-            sendMessage();
-        }
-    }
-});
-
-sendBtn.addEventListener('click', sendMessage);
-
-// newChatBtn.addEventListener('click', () => {
-//     chatMessages.innerHTML = '';
-//     userInput.value = '';
-//     userInput.style.height = 'auto';
-//     editHistory = []; // 新しいチャットで編集履歴もクリア
-//     // console.log("New chat started.");
-// });
-
-// sendBtn.addEventListener('click', sendMessage);
-
-// Google ログインのやつ
-function updateUIAfterLogin(user) {
-    currentUser = user;
-    currentUserIdForApi = user.id; // APIで使うユーザーIDを更新！
-
-    // ログイン後のUI表示
-    userInfo.classList.remove('hidden');
-    userEmailSpan.textContent = user.email;
-    if (googleSignInButton) googleSignInButton.classList.add('hidden'); // Googleログインボタンを隠す
-    
-    // ログイン後に最初のチャットを開始するなどの処理
-    newChatBtn.disabled = false;
-    console.log(`User ${user.email} (ID: ${user.id}) logged in.`);
-    addMessageToState('system', `${user.email} としてログインしました。「新しいチャット」ボタンで会話を開始してください。`);
-}
-
-function updateUIAfterLogout() {
-    currentUser = null;
-    currentUserIdForApi = null; 
-
-    // ログアウト後のUI表示
-    userInfo.classList.add('hidden');
-    userEmailSpan.textContent = '';
-    if (googleSignInButton) googleSignInButton.classList.remove('hidden'); // Googleログインボタンを表示
-    
-    // チャット画面もリセット
-    messages = [];
-    renderMessages();
-    currentThreadId = null;
-    newChatBtn.disabled = true; // ログインするまで新しいチャットは不可
-    userInput.disabled = true;
-    sendBtn.disabled = true;
-    console.log("User logged out.");
-}
-
-
-// --- ユーティリティ関数 (escapeHtml, recordEdit, generateEditHistorySummary, interpretUserInputBehavior) ---
-// これらも前回提示したもので問題ないはずです。
-function escapeHtml(unsafe) {
-    if (unsafe === null || typeof unsafe === 'undefined') { // ★ undefined や null の場合は空文字列を返す
-        return "";
-    }
-    if (typeof unsafe !== 'string') {
-        try { unsafe = String(unsafe); } catch (e) { return ""; }
-    }
-    return unsafe
-         .replace(/&/g, "&")
-         .replace(/</g, "<")
-         .replace(/>/g, ">")
-         .replace(/"/g, '"')
-         .replace(/'/g, "'");
-}
-
-// recordEdit は jsdiff ライブラリ (Diff) が必要。もし使うならHTMLに <script src="https://cdnjs.cloudflare.com/ajax/libs/jsdiff/5.1.0/diff.min.js"></script> を追加
-function recordEdit(oldText, newText) {
-    if (oldText === newText || typeof Diff === 'undefined') return null; // Diffライブラリがない場合は何もしない
-    try {
-        const diff = Diff.diffChars(oldText, newText);
-        const edit = {
-            time: new Date(),
-            changes: diff.map(part => ({
-                type: part.added ? 'added' : part.removed ? 'removed' : 'common',
-                value: part.value
-            }))
-        };
-        editHistory.push(edit);
-        // console.log("Edit Recorded:", edit); // デバッグ用
-        return edit;
-    } catch(e) {
-        console.error("Error in recordEdit (jsdiff):", e);
-        return null;
-    }
-}
-
-
-function generateEditHistorySummary(history) {
-    if (!history || history.length === 0) return "編集はありませんでした。";
-
-    let addedChars = 0;
-    let removedChars = 0;
-    let edits = history.length;
-
-    history.forEach(edit => {
-        edit.changes.forEach(change => {
-            if (change.type === 'added') addedChars += change.value.length;
-            if (change.type === 'removed') removedChars += change.value.length;
-        });
+        await handleStream(message);
     });
-    return `編集回数: ${edits}, 追加文字数: ${addedChars}, 削除文字数: ${removedChars}`;
-}
 
-function interpretUserInputBehavior(durationMs, history, backspaceCount, finalLength) {
-    const seconds = durationMs / 1000;
-    let interpretation = "";
+    // ストリーム処理
+    const handleStream = async (message) => {
+        try {
+            const response = await fetch(`${API_BASE_URL}/api/v1/sessions/${sessionId}/messages/stream`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'text/event-stream'
+                },
+                body: JSON.stringify({ message: message, sensitivity_level: 'medium' })
+            });
 
-    if (seconds < 2 && history.length <= 1 && finalLength > 0) {
-        interpretation = "ユーザーは迅速に入力し、明確な意図を持っていた可能性があります。";
-    } else if (seconds > 15 || history.length > 5 || backspaceCount > 10) {
-        interpretation = "ユーザーは時間をかけて熟考したか、入力内容に迷いがあった可能性があります。多くの編集やバックスペースが見られます。";
-    } else if (history.length > 2 && backspaceCount > 3) {
-        interpretation = "ユーザーは何度か修正を加えながら入力したようです。";
-    } else if (finalLength === 0 && durationMs > 1000) {
-        interpretation = "ユーザーは何かを入力しようとしましたが、最終的に削除しました。";
-    } else {
-        interpretation = "ユーザーは標準的なペースで入力したようです。";
-    }
+            if (!response.ok) throw new Error(`API Error: ${response.status} ${response.statusText}`);
 
-    if (isThinking) { // グローバルなisThinkingフラグも考慮
-        interpretation += " また、送信前には一定時間思考していた可能性があります。";
-    }
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            
+            // メッセージ受信時の処理として processEvent を渡してパーサーを初期化
+            const parser = new SSEParser(processEvent);
 
-    return interpretation;
-}
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
 
-async function checkLoginStatusOnLoad() {
-    const token = localStorage.getItem('googleIdToken');
-    
-    if (!token) {
-        console.log("No token found. User is not logged in.");
-        updateUIAfterLogout();
-        return;
-    }
+                buffer += decoder.decode(value, { stream: true });
+                // すべての改行コードに対応
+                const lines = buffer.split(/\r\n|\r|\n/);
+                buffer = lines.pop() || ''; // 不完全な最後の行をバッファに残す
 
-    console.log("Token found. Verifying with backend...");
-    try {
-        // 保存されているトークンを使って /users/me にアクセス
-        const res = await fetch(`${API_BASE_URL}/users/me`, {
-            headers: {
-                'Authorization': `Bearer ${token}`
+                for (const line of lines) {
+                    parser.push(line); // 1行ずつパーサーに渡して処理
+                }
             }
-        });
-
-        if (res.ok) {
-            // トークンが有効だった場合
-            const myProfile = await res.json();
-            console.log("Token validation successful. Profile:", myProfile);
-            // ログイン後のUI更新と状態設定
-            updateUIAfterLogin({id: myProfile.id, email: myProfile.email});
-        } else {
-            // トークンが無効だった場合 (期限切れなど)
-            console.error("Token is invalid or expired. Status:", res.status);
-            console.log("Why End load")
-            localStorage.removeItem('googleIdToken'); // 無効なトークンは削除
-            updateUIAfterLogout();
+        } catch (error) {
+            console.error('Streaming error:', error);
+            appendMessage('assistant', `エラーが発生しました: ${error.message}`);
+            setLoading(false);
         }
-    } catch (error) {
-        console.error("Error verifying token:", error);
-        localStorage.removeItem('googleIdToken'); // エラー時もトークン削除が安全
-        updateUIAfterLogout();
-    }
-}
+    };
 
+    // SSEイベントを解釈し、UIを更新する
+    const processEvent = (event, data) => {
+        console.log(event, data);
+        let phaseBox;
 
+        const formatPhaseName = (phase) => {
+            return phase.replace(/_/g, ' ').replace(/(?:^|\s)\S/g, a => a.toUpperCase());
+        };
 
-//<summury>aaa</summury>
+        switch (event) {
+            case 'phase_start':
+                phaseBox = document.createElement('div');
+                phaseBox.classList.add('phase-box');
+                phaseBox.id = `phase-${data.phase}`;
+                
+                const title = document.createElement('h3');
+                title.textContent = formatPhaseName(data.phase);
+                phaseBox.appendChild(title);
 
+                const contentDiv = document.createElement('div');
+                contentDiv.classList.add('phase-content');
+                phaseBox.appendChild(contentDiv);
 
+                thinkingProcess.appendChild(phaseBox);
+                break;
 
+            case 'abstract_result':
+                phaseBox = document.getElementById('phase-abstract_recognition');
+                if (phaseBox) {
+                    const content = phaseBox.querySelector('.phase-content');
+                    const emotions = Array.isArray(data.emotional_state) ? data.emotional_state.join(', ') : 'N/A';
+                    const pattern = data.cognitive_pattern || 'N/A';
+                    content.innerHTML = `<p><strong>Emotions:</strong> ${emotions}</p><p><strong>Pattern:</strong> ${pattern}</p>`;
+                }
+                break;
 
+            case 'concrete_links':
+                phaseBox = document.getElementById('phase-concrete_understanding');
+                if (phaseBox) {
+                    const content = phaseBox.querySelector('.phase-content');
+                    let episodesHtml = data.related_episodes?.map((ep, i) => 
+                        `<li>Ep${i+1}: "${ep.text_snippet.substring(0, 70)}..." (Score: ${ep.relevance_score.toFixed(2)})</li>`
+                    ).join('') || '<li>No related episodes found.</li>';
+                    
+                    content.innerHTML = `<p>Found ${data.total_retrieved} total episodes.</p><ul>${episodesHtml}</ul>`;
+                }
+                break;
 
+            case 'thought_process':
+                phaseBox = document.getElementById('phase-response_generation');
+                if (phaseBox) {
+                    const content = phaseBox.querySelector('.phase-content');
+                    const decision = data.inferred_decision || 'N/A';
+                    const action = data.inferred_action || 'N/A';
+                    content.innerHTML = `<p><strong>Decision:</strong> ${decision}</p><p><strong>Action:</strong> ${action}</p>`;
+                }
+                break;
+            
+            case 'phase_complete':
+                phaseBox = document.getElementById(`phase-${data.phase}`);
+                if (phaseBox) {
+                    const title = phaseBox.querySelector('h3');
+                    if (title) title.textContent += ` (${data.duration_ms.toFixed(2)} ms)`;
+                }
+                break;
 
-// 初期フォーカス
-userInput.focus();
-// 初期状態で最初の質問を取得 (任意)
-// (async () => {
-//     await new Promise(resolve => setTimeout(resolve, 100)); // DOM描画を待つ (もっと良い方法がある)
-//     if (!currentThreadId) { // まだチャットが開始されていなければ
-//          addMessageToState('system', '「新しいチャット」ボタンを押して会話を開始してください。');
-//     }
-// })();
+            case 'final_response':
+                appendMessage('assistant', data.response.dialogue);
+                break;
 
-window.addEventListener('DOMContentLoaded', () => {
-    checkLoginStatusOnLoad();
+            case 'stream_end':
+                setLoading(false);
+                break;
+
+            case 'error':
+                appendMessage('assistant', `エラー: ${data.message} (コード: ${data.code})`);
+                setLoading(false);
+                break;
+        }
+        thinkingContainer.scrollTop = thinkingContainer.scrollHeight;
+    };
+
+    // --- UIヘルパー関数 ---
+
+    const appendMessage = (sender, text) => {
+        const messageElement = document.createElement('div');
+        messageElement.classList.add('message', sender);
+        const p = document.createElement('p');
+        p.textContent = text;
+        messageElement.appendChild(p);
+        chatHistory.appendChild(messageElement);
+        chatHistory.scrollTop = chatHistory.scrollHeight;
+    };
+
+    const setLoading = (isLoading) => {
+        messageInput.disabled = isLoading;
+        sendButton.disabled = isLoading;
+        thinkingContainer.classList.toggle('hidden', !isLoading);
+        if (!isLoading) {
+            thinkingProcess.innerHTML = '';
+        }
+    };
+
+    // 初期化
+    createSession();
 });

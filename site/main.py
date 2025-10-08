@@ -31,7 +31,7 @@ BACKEND_URL = os.environ.get('BACKEND_URL', 'http://localhost:8000')
 # ルート定義
 @app.get('/chat', response_class=HTMLResponse)
 async def chat_index(request: Request):
-    return templates.TemplateResponse("chat.html", {"request": request, "client_id": GOOGLE_CLIENT_ID, "backend_url": BACKEND_URL})
+    return templates.TemplateResponse("chat.html", {"request": request})
 
 @app.get('/view', response_class=HTMLResponse)
 async def view_index(request: Request):
