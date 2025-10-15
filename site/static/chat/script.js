@@ -159,7 +159,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 break;
 
             case 'abstract_result':
-                phaseBox = document.getElementById('phase-abstract_recognition');
+                // Use querySelector scoped to the thinkingProcess container to avoid duplicate ID conflicts
+                phaseBox = thinkingProcess.querySelector('#phase-abstract_recognition');
                 if (phaseBox) {
                     const content = phaseBox.querySelector('.phase-content');
                     const emotions = Array.isArray(data.emotional_state) ? data.emotional_state.join(', ') : 'N/A';
@@ -169,7 +170,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 break;
 
             case 'concrete_links':
-                phaseBox = document.getElementById('phase-concrete_understanding');
+                // Use querySelector scoped to the thinkingProcess container
+                phaseBox = thinkingProcess.querySelector('#phase-concrete_understanding');
                 if (phaseBox) {
                     const content = phaseBox.querySelector('.phase-content');
                     let episodesHtml = data.related_episodes?.map((ep, i) => 
@@ -181,7 +183,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 break;
 
             case 'thought_process':
-                phaseBox = document.getElementById('phase-response_generation');
+                // Use querySelector scoped to the thinkingProcess container
+                phaseBox = thinkingProcess.querySelector('#phase-response_generation');
                 if (phaseBox) {
                     const content = phaseBox.querySelector('.phase-content');
                     const decision = data.inferred_decision || 'N/A';
@@ -191,7 +194,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 break;
             
             case 'phase_complete':
-                phaseBox = document.getElementById(`phase-${data.phase}`);
+                // Use querySelector scoped to the thinkingProcess container
+                phaseBox = thinkingProcess.querySelector(`#phase-${data.phase}`);
                 if (phaseBox) {
                     const title = phaseBox.querySelector('h3');
                     if (title) title.textContent += ` (${data.duration_ms.toFixed(2)} ms)`;
@@ -204,6 +208,28 @@ document.addEventListener('DOMContentLoaded', () => {
 
             case 'stream_end':
                 setLoading(false);
+                const thinkingContent = document.getElementById('thinking-process');
+                // 思考プロセスに内容がある場合のみ折りたたみ要素を作成
+                if (thinkingContent.hasChildNodes()) {
+                    const lastAssistantMessage = chatHistory.querySelector('.message.assistant:last-child');
+                    if (lastAssistantMessage) {
+                        const details = document.createElement('details');
+                        details.className = 'thinking-process-details';
+                        
+                        const summary = document.createElement('summary');
+                        summary.textContent = '思考プロセス';
+                        details.appendChild(summary);
+
+                        // すべてのフェーズボックスを details 要素に移動
+                        while (thinkingContent.firstChild) {
+                            details.appendChild(thinkingContent.firstChild);
+                        }
+                        
+                        lastAssistantMessage.appendChild(details);
+                        // 新しい要素が追加されたのでスクロールを調整
+                        chatHistory.scrollTop = chatHistory.scrollHeight;
+                    }
+                }
                 break;
 
             case 'error':
@@ -230,7 +256,8 @@ document.addEventListener('DOMContentLoaded', () => {
         messageInput.disabled = isLoading;
         sendButton.disabled = isLoading;
         thinkingContainer.classList.toggle('hidden', !isLoading);
-        if (!isLoading) {
+        if (isLoading) {
+            // 新しい推論が始まるときに以前のプロセスをクリア
             thinkingProcess.innerHTML = '';
         }
     };
