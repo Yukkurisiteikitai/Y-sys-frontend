@@ -1,4 +1,5 @@
 site/site_venv
+site/sample_client
 __pychache__
 mypy_cache
 .vscode

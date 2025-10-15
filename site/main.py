@@ -39,3 +39,8 @@ async def view_index(request: Request):
 
 # FastAPIでは、uvicornを使ってサーバーを起動します。
 # コマンドラインから `uvicorn main:app --reload --port 8010` を実行してください。
+from colorful_print import color_set_print
+import uvicorn
+if __name__ == "__main__":
+    print(f"Forntend -> SEVER:{color_set_print(text='BOOT ON', color='blue')} http://127.0.0.1:8010")
+    uvicorn.run(app, host="127.0.0.1", port=8010)
