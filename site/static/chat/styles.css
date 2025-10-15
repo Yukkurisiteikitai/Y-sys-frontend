@@ -228,3 +228,36 @@ body {
 ::-webkit-scrollbar-thumb:hover {
     background: #666;
 }
+
+/* --- Collapsible Thinking Process --- */
+.thinking-process-details {
+    margin-top: 15px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background-color: var(--thinking-bg);
+    max-width: 80%; /* Match message p width */
+}
+
+.thinking-process-details summary {
+    padding: 12px 15px;
+    cursor: pointer;
+    outline: none;
+    font-weight: 600;
+    color: var(--text-color);
+    transition: background-color 0.2s ease;
+}
+
+.thinking-process-details summary:hover {
+    background-color: #3c3c3c;
+}
+
+.thinking-process-details[open] {
+    padding: 0 15px 15px 15px;
+}
+
+.thinking-process-details[open] > summary {
+    /* Use negative margin to make summary span full width */
+    margin: 0 -15px 10px -15px;
+    border-bottom: 1px solid var(--border-color);
+    color: var(--accent-color);
+}
