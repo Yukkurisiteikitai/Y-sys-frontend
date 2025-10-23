@@ -1,6 +1,6 @@
 document.addEventListener('DOMContentLoaded', () => {
-    const API_BASE_URL = 'http://127.0.0.1:8000';
-    let sessionId = null;
+    const API_BASE_URL = 'http://localhost:8000';
+    let thread_id = null;
 
     // DOM要素の取得
     const messageForm = document.getElementById('message-form');
@@ -61,15 +61,15 @@ document.addEventListener('DOMContentLoaded', () => {
     // 1. セッションを作成
     const createSession = async () => {
         try {
-            const response = await fetch(`${API_BASE_URL}/api/v1/sessions`, {
+            const response = await fetch(`${API_BASE_URL}/api/v1/threads`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({"metadata": {"client_info": "api_test_client"}}) // サーバー仕様に合わせて空のボディを送信
+                body: JSON.stringify({"user_id": "test-user", "title": "My Test Thread"}) // サーバー仕様に合わせて空のボディを送信
             });
             if (!response.ok) throw new Error(`Session creation failed: ${response.statusText}`);
             const data = await response.json();
-            sessionId = data.session_id;
-            console.log('Session created:', sessionId);
+            thread_id = data.thread_id;
+            console.log('Session created:', thread_id);
         } catch (error) {
             console.error('Error creating session:', error);
             appendMessage('assistant', 'APIへの接続に失敗しました。サーバーが起動しているか確認してください。');
@@ -82,7 +82,7 @@ document.addEventListener('DOMContentLoaded', () => {
     messageForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         const message = messageInput.value.trim();
-        if (!message || !sessionId) return;
+        if (!message || !thread_id) return;
 
         appendMessage('user', message);
         messageInput.value = '';
@@ -94,7 +94,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // ストリーム処理
     const handleStream = async (message) => {
         try {
-            const response = await fetch(`${API_BASE_URL}/api/v1/sessions/${sessionId}/messages/stream`, {
+            const response = await fetch(`${API_BASE_URL}/api/v1/threads/${thread_id}/messages/stream`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
